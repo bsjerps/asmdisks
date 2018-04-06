@@ -24,7 +24,8 @@ Also supports EMC Powerpath and EMC DSSD volumes.
 %install
 rm -rf %{buildroot}
 mkdir %{buildroot}
-mv * %{buildroot}
+
+%makeinstall
 
 %files
 %defattr(0444,root,root)
