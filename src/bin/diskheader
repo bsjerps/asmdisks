@@ -1,0 +1,66 @@
+#!/bin/bash
+#============================================================================
+# Title       : diskheader
+# Description : Shows hexdump of the first 1k block of a disk
+# Author      : Bart Sjerps <bart@outrun.nl>
+# License     : GPLv3+
+# ---------------------------------------------------------------------------
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License at <http://www.gnu.org/licenses/> for
+# more details.
+# ---------------------------------------------------------------------------
+# Revision history:
+# 2017-02-01 : First version
+#============================================================================
+# Configuration parameters:
+# ---------------------------------------------------------------------------
+#============================================================================
+# Initialization - Logging - Etc.
+# ---------------------------------------------------------------------------
+die() { echo "$(basename $0): [die] $@" >&2 ; exit 10 ; }
+
+test -x /usr/bin/xxd || die "Requires xxd (vim-common)"
+
+#============================================================================
+# Usage:
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<- EOF
+	$(basename $0) [-c blocks] [-w width] <disk>
+	
+	Shows a hexdump of the header of the given disk.
+	
+	  -c blocks - show <blocks> (default 1 block of 1024 bytes)
+	  -w width - Hexdump with <width> (default 32)
+	
+	EOF
+}
+#============================================================================
+# Functions
+# ---------------------------------------------------------------------------
+
+
+#============================================================================
+# Main section - parsing options etc
+# ---------------------------------------------------------------------------
+while getopts ":hb:c:w:" OPT; do
+  case "$OPT" in
+      b) blksz=${OPTARG} ;;
+      c) count=${OPTARG} ;;
+      w) width=${OPTARG} ;;
+   \?|h) usage ; exit 0 ;;
+  esac
+done
+shift $(expr $OPTIND - 1)
+
+test -z "$1" && usage && exit
+test -b "$1" || die "$1 is not a block device"
+
+dd if="$1" bs=${blksz:-1024} count=${count:-1} status=none | xxd -c ${width:-32}

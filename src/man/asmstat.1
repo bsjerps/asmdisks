@@ -1,0 +1,41 @@
+.TH asmstat 1 "2016-10-20" "asmdisks" "ASMdisks User Manual"
+.SH NAME
+asmstat \- wrapper for iostat showing ASM devices
+.SH SYNOPSIS
+.B asmstat <args>
+.SH DESCRIPTION
+.B asmstat
+is a wrapper script for
+.B iostat(1)
+.br
+It uses
+.B sed(1)
+to filter mapper devices and replace /dev/sdX devices with /dev/oracleasm/volX
+so it shows more meaningful output than plain iostat when using with 
+.B asm(1)
+
+.SH OPTIONS
+The options are passed straight to
+.B iostat(1)
+and therefore 100% equal.
+.SH FILES
+/dev/oracleasm/
+.SH EXAMPLE
+.B asmstat -xk 2
+.br
+shows IO performance statistics for ASM and generic disk devices every two seconds.
+.SH SEE ALSO
+asm(1), iostat(1), sed(1)
+.SH AUTHOR
+Compiled by Bart Sjerps - contact me via my blog "Dirty Cache" - \fIhttp://bartsjerps.wordpress.com\fR
+.br
+If you have suggestions for improvements in this tool, please send them
+along via the above address.
+.SH COPYRIGHT
+This software is Open Source and may be distributed "as is", modified, reproduced
+and passed to others under the GPLv3 license - \fIhttp://www.gnu.org/licenses/gpl-3.0.txt\fR
+.SH DISCLAIMER
+This software is provided "as is" and because it is mostly based
+on CentOS linux, it follows the licensing and warranty guidelines 
+of the GPL. In normal language that means I will not be held 
+responsible for any problems you may encounter with this software.

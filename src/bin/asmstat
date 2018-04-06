@@ -1,0 +1,84 @@
+#!/bin/bash
+#============================================================================
+# Title              : asmstat
+# Description        : Wrapper for iostat that maps ASM devices
+# Author             : Bart Sjerps <bart@outrun.nl>
+# License            : GPLv3+
+# ---------------------------------------------------------------------------
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License at <http://www.gnu.org/licenses/> for
+# more details.
+# ---------------------------------------------------------------------------
+# Revision history:
+# 2016-10-20 : Minor update
+# 2015-03-08 : Fixed alignment
+# 2014-10-24 : Updated template
+# 2014-05-02 : Created
+# ---------------------------------------------------------------------------
+# Additional info:
+# Man page:          : Yes
+# Bash completion    : No
+#============================================================================
+# Configuration parameters:
+# ---------------------------------------------------------------------------
+
+#============================================================================
+# Initialization - Logging - Etc.
+# ---------------------------------------------------------------------------
+# Filter device-mapper and non-disk devices
+sedstring="/dm-/d;/scd/d;"
+#============================================================================
+# Usage:
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<- EOF
+	$(basename $0) [ options ]
+	
+	A wrapper for iostat that translates /dev/sdXX devices into their
+	ASM device names. Example: asmstat -xm 2
+	Any options will be directly passed on to iostat.
+	See man asmstat(1) and asm(1) for more info.
+	
+	EOF
+}
+#============================================================================
+# Main
+# ---------------------------------------------------------------------------
+# Normal getopts doesn't work as we need to pass everything to iostat...
+case $1 in
+  -h)	usage ; exit 0 ;;
+  -?)   usage ; exit 0 ;;
+esac
+
+if ! ls /dev/oracleasm/* &>/dev/null ; then
+  iostat $@
+else
+  for asmdev in /dev/oracleasm/*
+  do
+    maj=$(echo "ibase=16; $(stat -Lc '%t' ${asmdev}|tr 'a-z' 'A-Z')"|bc)
+    min=$(echo "ibase=16; $(stat -Lc '%T' ${asmdev}|tr 'a-z' 'A-Z')"|bc)
+    # get location of dev
+    # old method:
+    # dev=$(egrep -l "${maj}:${min}$" /sys/devices/{*,*/*,*/*/*}/host*/{*/*,*/*/*}/block/*/dev 2>/dev/null | head -1)
+    # better method (!?):
+    dev=$(readlink $(find /sys/dev/block -name "${maj}:${min}" | sed -n "1p" )|sed "s/.*\///")
+    [[ "$dev" == "" ]] && continue
+    disk=$(echo $dev | awk -F'/' '{print $(NF-1)}')
+    asmvol=${asmdev##*/}
+    # get size of largest string
+    len=${#disk} ; (( ${#asmvol} > len)) && len=${#asmvol}
+    # align asm volume name to 6 chars
+    # translate /dev/sdX into /dev/oracleasm/<vol>
+    sedstring="${sedstring}$(printf "s/%-${len}s/%-${len}s/;\n" $disk $asmvol)"
+  done
+  # run iostat command with translation
+  iostat $@ | sed -u "$sedstring"
+fi
+

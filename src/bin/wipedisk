@@ -1,0 +1,77 @@
+#!/bin/bash
+#============================================================================
+# Title              : wipedisk
+# Description        : Wipes first 1MB of a disk and makes backup in /tmp
+# Author             : Bart Sjerps <bart@outrun.nl>
+# License            : GPLv3+
+# ---------------------------------------------------------------------------
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License at <http://www.gnu.org/licenses/> for
+# more details.
+# ---------------------------------------------------------------------------
+# Revision history:
+# 2016-10-20 : Update
+# 2014-10-27 : Bugfix, added nowait
+# 2014-10-22 : Created
+# ---------------------------------------------------------------------------
+# Additional info:
+# Man page:          : Yes
+# Bash completion    : No
+#============================================================================
+# Configuration parameters:
+# ---------------------------------------------------------------------------
+
+#============================================================================
+# Initialization - Logging - Etc.
+# ---------------------------------------------------------------------------
+DATE=$(date +'%Y-%m-%d') # $(date +"%F-%H:%M:%S")
+#============================================================================
+# Usage:
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<- EOF
+	$(basename $0) -f [-n] <device>
+	Zeroes out the first 1 MiB of the give device (to clear all kinds of disk signatures).
+	The "-f" option is required as a safeguard.
+	-n - nowait (skips 5 seconds safety delay)
+	In case of emergency you can restore this first megabyte from backup in /tmp.
+	Run the manpage for mor info (man $(basename $0))
+	EOF
+}
+#============================================================================
+# Functions
+# ---------------------------------------------------------------------------
+#============================================================================
+# Main section - parsing options etc
+# ---------------------------------------------------------------------------
+while getopts ":hfn" OPT; do
+  case "$OPT" in
+    f)  FORCE=Y ;;
+    n)  NOWAIT=Y ;;
+    h)	usage >&2 ; exit 1 ;;
+   \?)	usage >&2 ; exit 1 ;;
+  esac
+done
+shift $(expr $OPTIND - 1)
+test $# -lt 1 && { usage ; exit 10 ; }
+
+if [ "$FORCE" == "Y" ]; then
+  DISK=${1:-nodisk}
+  if [ ! -b $DISK ]; then
+    echo "$DISK not found"
+    exit 1
+  fi
+  BKUP=$(echo $DISK | tr '/' '_')
+  echo "Backing up 1st MB of $DISK in /tmp/$BKUP, restore with dd if=/tmp/$BKUP of=/dev/$DISK bs=1M count=1"
+  dd if=$1 of=/tmp/backup_$BKUP bs=1M count=1
+  echo "Wiping 1st mb of disk $DISK"
+  [[ -z $NOWAIT ]] && for i in {5..1}; do echo $i ; sleep 1 ; done
+  dd if=/dev/zero of=$DISK bs=1M count=1
+fi
