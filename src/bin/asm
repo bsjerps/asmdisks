@@ -19,7 +19,7 @@
 # more details.
 # ---------------------------------------------------------------------------
 # Revision history:
-# 2018-08-20 : Embedded manpage
+# 2018-08-20 : Embedded manpage, removed DSSD support
 # 2018-04-06 : Add $PATH to support remote and scripted execution
 # 2017-12-14 : Bugfix for import function
 # 2017-10-04 : Bugfix for SCSI id's with whitespace (Linux TGTD)
@@ -416,7 +416,7 @@ createconf() {
 	# label type identifier
 	# where
 	# label: diskstring/volume name (default diskstring is oracleasm and can be omitted)
-	# type:  one of scsi, part, part=scsi disk partition, ppath, dssd, scini,
+	# type:  one of scsi, part, part=scsi disk partition, ppath, scini,
 	#   mapper (scsi=entire SCSI disk, part=scsi disk partition, mapper=linux disk mapper device)
 	# label: scsi_id, scsi_id:partition, mapper_name, vol_id etc
 	#
@@ -429,8 +429,7 @@ createconf() {
 	# vol2 part 36000c298afa5c31b47fe76cbd1750937:1 # partition 1 of entire SCSI disk
 	# vol3 mapper mpathb                            # /dev/mapper/mpathb (multipath device)
 	# vol4 ppath emcpowerx                          # /dev/emcpowerx (EMC Powerpath device)
-	# vol5 dssd cca2a87a-6826-4424-a7dd-540cb3a0260b-000000000000003b # dssd volume
-	# vol6 scini 6e85d4fe3b125edc-6f99ffeb00000000  # ScaleIO volume
+	# vol5 scini 6e85d4fe3b125edc-6f99ffeb00000000  # ScaleIO volume
 	# iorate/test1 mapper iops-vol1                 # LV vol1 on VG iops, will be mapped as /dev/iorate/test1
 	# -----------------------------------------------
 	EOF
@@ -490,11 +489,6 @@ createdisk() {
       awk -v m="$dmname" '$3==m {exit 1;}' /etc/asmtab || rc=10 die "Mapper device $dmname already exists in asmtab!"
       echo "$label mapper $dmname" >> /etc/asmtab
       ;;
-    dssd) # device is EMC DSSD disk
-      oid=$(cat /sys/block/${device##*/}/dssd_mp/oid)
-      awk -v m="$oid" '$3==m {exit 1;}' /etc/asmtab || rc=10 die "DSSD device with ID $oid already exists in asmtab!"
-      echo "$label dssd $oid" >> /etc/asmtab
-      ;;
     scini) # device is EMC ScaleIO disk
       oid=$(/bin/emc/scaleio/drv_cfg --query_block_device_id --block_device ${device})
       awk -v m="$oid" '$3==m {exit 1;}' /etc/asmtab || rc=10 die "ScaleIO device with ID $oid already exists in asmtab!"
@@ -546,21 +540,8 @@ scandisks() {
 	# with each run of the "asm" command.
 	# Direct edit the file /etc/asmtab instead.
 	EOF
-
-  # Insert DSSD header if DSSD config lines detected
-  # Note: old method (not working?)
-  #	SUBSYSTEM=="block" KERNEL=="dssd????*" IMPORT{program}="dssd_id %k %S"
-  #	SUBSYSTEM=="block" KERNEL=="dssd????*" IMPORT{program}="blkid -o udev -p $tempnode"
-  #	Also not working correctly:
-  #	SUBSYSTEM=="block" KERNEL=="dssd????*" IMPORT{program}="dssd_id -e \$tempnode"
-  awk '$2=="dssd" { f=1 ; } END { exit !f ;}' /etc/asmtab && cat <<- EOF >> $WORKDIR/99-asm.rules
-	
-	# Early detect DSSD OID - before 999-dssd-asm.rules is processed
-	SUBSYSTEM=="block" KERNEL=="dssd????*" IMPORT{program}="dssd_id %k %S"
-	SUBSYSTEM=="block" KERNEL=="dssd????*" IMPORT{program}="blkid -o udev -p \$tempnode"
-	EOF
   cat <<- EOF >> $WORKDIR/99-asm.rules
-
+	
 	SUBSYSTEM!="block", GOTO="asmudev_end"
 	
 	# Don't touch the bootdisk (/dev/${bootdisk:-notfound})
@@ -605,7 +586,6 @@ scandisks() {
       pppart) LINE=${LINE}', ENV{DEVTYPE}=="partition", KERNEL=="'${ID%:*}${ID#*:}'"' ;;
       scsi)   LINE=${LINE}', ENV{DEVTYPE}=="disk", KERNEL=="sd*", ENV{ID_SERIAL}=="'$ID'"' ;;
       ppath)  LINE=${LINE}', ENV{DEVTYPE}=="disk", KERNEL=="'$ID'"' ;;
-      dssd)   LINE=${LINE}', ENV{DSSD_OID}=="'$ID'"' ;;
       scini)  LINE=${LINE}', KERNEL=="scini*", PROGRAM="/opt/emc/scaleio/sdc/bin/drv_cfg --query_block_device_id --block_device /dev/%k", RESULT=="'$ID'" ' ;;
       *) echo "unknown asmudev volume type $TYPE" ; exit 10 ;;
     esac
@@ -634,7 +614,6 @@ devinfo() {
   devname=$(readlink -f /sys/dev/block/${major}\:${minor} | awk -F/ '{print $NF}')
   case $devtype in
     sd)            (($minor%16==0)) && dtype=scsi || dtype=partition ;;
-    dssd)          dtype=dssd ;;
     device-mapper) dtype=mapper ;;
     *)             dtype=unknown ;;
   esac
@@ -642,7 +621,6 @@ devinfo() {
     scsi)      name=$(lsscsi -k 2>/dev/null | awk -v D=/dev/$devname '$NF==D {print $1}') ;;
     partition) name="part$((min%16))" ;;
     mapper)    name=$(dmsetup info -j "$major" -m "$minor" -c --noheadings -o name) ;;
-    dssd)      name=$(cat /sys/dev/block/${major}\:${minor}/dssd_mp/oid 2>/dev/null | awk -F- '{print $NF}') ;;
     *)         name="-" ;;
   esac
   blocks=$(cat /sys/dev/block/${major}\:${minor}/size)
@@ -694,7 +672,7 @@ listdisks() {
     major=$(cat /sys/block/$d/dev | cut -d: -f1)
     dt=$(devtrans $major)
     case $dt in
-      sd|dssd|scini|power2) diskinfo $d ;;
+      sd|scini|power2) diskinfo $d ;;
     esac
   done
 }
@@ -770,12 +748,11 @@ renamedisk() {
 #============================================================================
 # Main section - parsing options etc
 # ---------------------------------------------------------------------------
-while getopts ":hndt" OPT; do
+while getopts ":ndt" OPT; do
   case "$OPT" in
-      n) NOHEAD=Y ;;
-      d) DEBUG=Y ;;
-      t) SEPARATOR=T ; NOHEAD=Y ;;
-   \?|h) usage >&2 ; exit 0 ;;
+    n) NOHEAD=Y ;;
+    d) DEBUG=Y ;;
+    t) SEPARATOR=T ; NOHEAD=Y ;;
   esac
 done
 shift $(expr $OPTIND - 1)
@@ -786,6 +763,7 @@ createconf
 checkuuid
 
 case $ACTION in
+  none)             listdisks ;;
   rescan)           rescan ;;
   createdisk)       createdisk "$@" ;;
   deletedisk)       deletedisk "$@" ;;
@@ -797,7 +775,6 @@ case $ACTION in
   list)		    list ;;
   bootdisk)         bootdisk ;;
   dump)             cat $rulesfile ;;
-  *)                usage ; exit 0 ;;
+  *)                die "Unknown action" ;;
 esac
 
-rc=0
