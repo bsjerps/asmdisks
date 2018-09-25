@@ -1,9 +1,11 @@
 #!/bin/bash
 #============================================================================
-# Title              : asmstat
-# Description        : Wrapper for iostat that maps ASM devices
-# Author             : Bart Sjerps <bart@outrun.nl>
-# License            : GPLv3+
+# Title       : asmstat
+# Description : Wrapper for iostat that maps ASM devices
+# Author      : Bart Sjerps <bart@outrun.nl>
+# Version     : 1
+# Manual      : asmdisks
+# License     : GPLv3+
 # ---------------------------------------------------------------------------
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -39,23 +41,72 @@ sedstring="/dm-/d;/scd/d;"
 # ---------------------------------------------------------------------------
 usage() {
   cat <<- EOF
-	$(basename $0) [ options ]
+	Usage: $(basename $0) [ options ]
 	
 	A wrapper for iostat that translates /dev/sdXX devices into their
-	ASM device names. Example: asmstat -xm 2
-	Any options will be directly passed on to iostat.
-	See man asmstat(1) and asm(1) for more info.
+	ASM device names.  Any options will be directly passed on to iostat.
+	
+	It  uses  sed(1) to filter mapper devices and replace /dev/sdX devices
+	with /dev/oracleasm/volX so it shows more meaningful output than
+	plain iostat when using with asm(1)
+
+	Options:
+	The options are passed straight to iostat(1) and therefore 100% equal.
+	
+	*Example*
+	asmstat -xm 2
+	
+	shows IO performance statistics for ASM and generic disk devices every two seconds.
+	
+	*Files*
+	/dev/oracleasm
+	
+	*See also*
+	iostat(1), asm(1)
 	
 	EOF
 }
+version() {
+  local version=$(awk -F: '/^# Version / {sub(/ /,"",$NF) ; print $NF}' $0)
+  local author=$(awk -F: '/^# Author / {sub(/ /,"",$NF) ; print $NF}' $0)
+  local license=$(awk -F: '/^# License / {sub(/ /,"",$NF) ; print $NF}' $0)
+  case $license in
+    GPLv3+) local ltext="License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>." ;;
+    *)      local ltext="license $license (unknown)"
+  esac
+  cat <<- EOF
+	$(basename $0) ${version:-0.0}
+	Written by ${author:-<No Author>}, ${ltext}
+	@br
+	If you have suggestions for improvements in this tool, please send them along via the above address.
+	
+	Copyright (c) 2018 ${author% <*}
+	EOF
+  echo @br
+  echo This is free software: you are free to change and redistribute it.  There is NO WARRANTY, to the extent permitted by law.
+}
+
+mandump() {
+  test -x /usr/bin/help2man || exit 10
+  local desc=$(awk -F: '/^# Description/ {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local sect=$(awk -F: '/^# Section/     {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local manual=$(awk -F: '/^# Manual/    {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local source=$(awk -F: '/^# Source/    {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  SOURCE_DATE_EPOCH=$(stat -c %Y $0); export SOURCE_DATE_EPOCH
+  help2man -N -n "$desc" -s "${sect:-1}" -S "${source:-Outrun}" -m "${manual:-Outrun manual}" $0 | sed "s/^@/\./"
+}
+
+case $1 in
+  -\?)       man $(basename $0) ; exit;;
+  --help)    usage   ; exit ;;
+  --version) version ; exit ;;
+  --mandump) mandump ; exit ;;
+esac
+
+
 #============================================================================
 # Main
 # ---------------------------------------------------------------------------
-# Normal getopts doesn't work as we need to pass everything to iostat...
-case $1 in
-  -h)	usage ; exit 0 ;;
-  -?)   usage ; exit 0 ;;
-esac
 
 if ! ls /dev/oracleasm/* &>/dev/null ; then
   iostat $@

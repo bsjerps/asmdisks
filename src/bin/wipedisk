@@ -1,9 +1,11 @@
 #!/bin/bash
 #============================================================================
-# Title              : wipedisk
-# Description        : Wipes first 1MB of a disk and makes backup in /tmp
-# Author             : Bart Sjerps <bart@outrun.nl>
-# License            : GPLv3+
+# Title       : wipedisk
+# Description : Wipes first 1MB of a disk and makes backup in /tmp
+# Author      : Bart Sjerps <bart@outrun.nl>
+# Version     : 1.0
+# Manual      : asmdisks
+# License     : GPLv3+
 # ---------------------------------------------------------------------------
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -29,22 +31,88 @@
 # ---------------------------------------------------------------------------
 
 #============================================================================
-# Initialization - Logging - Etc.
-# ---------------------------------------------------------------------------
-DATE=$(date +'%Y-%m-%d') # $(date +"%F-%H:%M:%S")
-#============================================================================
 # Usage:
 # ---------------------------------------------------------------------------
 usage() {
   cat <<- EOF
-	$(basename $0) -f [-n] <device>
-	Zeroes out the first 1 MiB of the give device (to clear all kinds of disk signatures).
+	Usage: $(basename $0) -f [-n] <device>
+	
+	Zeroes out the first 1 MiB of the given device (to clear all kinds of disk signatures)
+	and makes a backup copy to /tmp.
 	The "-f" option is required as a safeguard.
-	-n - nowait (skips 5 seconds safety delay)
+	
+	It uses
+	@B dd(1)
+	to dump a copy of the first 1 MiB to /tmp/
+	then
+	@B dd(1)
+	again to zero out the first part of the device.
+	This helps for reinstalling Linux (after 'wipedisk /dev/sda') or clearing ASM devices.
+	Note that only the header gets deleted, the rest of the original data is still on the disk.
+	You may restore accidentally wiped disks by dd'ing the 1st MB back from tmp, i.e.:
+	dd if=/tmp/backup__dev_<dev> of=/dev/<dev> bs=1M count=1
+	
+	Options:
+	 -n   nowait (skips 5 seconds safety delay)
+	 -f   force
+	
+	*Warning*
+	Needless to say that this command can be very dangerous!
+	Therefore the -f option is required and a backup of the deleted disk chunk is
+	stored in /tmp.  But a fool with a tool...
+	
+	*Example*
+	wipedisk /dev/sda
+	
+	Wipes the disk label of the bootdisk (dangerous!). 
+	Note that the example is broken. You need to add the "-f" to make it work.
+
+	*See also*
+	asm(1), dd(1)
+
+	*Info*
 	In case of emergency you can restore this first megabyte from backup in /tmp.
-	Run the manpage for mor info (man $(basename $0))
+	
 	EOF
 }
+
+version() {
+  local version=$(awk -F: '/^# Version / {sub(/ /,"",$NF) ; print $NF}' $0)
+  local author=$(awk -F: '/^# Author / {sub(/ /,"",$NF) ; print $NF}' $0)
+  local license=$(awk -F: '/^# License / {sub(/ /,"",$NF) ; print $NF}' $0)
+  case $license in
+    GPLv3+) local ltext="License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>." ;;
+    *)      local ltext="license $license (unknown)"
+  esac
+  cat <<- EOF
+	$(basename $0) ${version:-0.0}
+	Written by ${author:-<No Author>}, ${ltext}
+	@br
+	If you have suggestions for improvements in this tool, please send them along via the above address.
+	
+	Copyright (c) 2018 ${author% <*}
+	EOF
+  echo @br
+  echo This is free software: you are free to change and redistribute it.  There is NO WARRANTY, to the extent permitted by law.
+}
+
+mandump() {
+  test -x /usr/bin/help2man || exit 10
+  local desc=$(awk -F: '/^# Description/ {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local sect=$(awk -F: '/^# Section/     {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local manual=$(awk -F: '/^# Manual/    {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local source=$(awk -F: '/^# Source/    {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  SOURCE_DATE_EPOCH=$(stat -c %Y $0); export SOURCE_DATE_EPOCH
+  help2man -N -n "$desc" -s "${sect:-1}" -S "${source:-Outrun}" -m "${manual:-Outrun manual}" $0 | sed "s/^@/\./"
+}
+
+case $1 in
+  -\?)       man $(basename $0) ; exit;;
+  --help)    usage   ; exit ;;
+  --version) version ; exit ;;
+  --mandump) mandump ; exit ;;
+esac
+
 #============================================================================
 # Functions
 # ---------------------------------------------------------------------------
@@ -55,8 +123,6 @@ while getopts ":hfn" OPT; do
   case "$OPT" in
     f)  FORCE=Y ;;
     n)  NOWAIT=Y ;;
-    h)	usage >&2 ; exit 1 ;;
-   \?)	usage >&2 ; exit 1 ;;
   esac
 done
 shift $(expr $OPTIND - 1)

@@ -3,6 +3,8 @@
 # Title       : diskheader
 # Description : Shows hexdump of the first 1k block of a disk
 # Author      : Bart Sjerps <bart@outrun.nl>
+# Version     : 1.0
+# Manual      : asmdisks
 # License     : GPLv3+
 # ---------------------------------------------------------------------------
 # This program is free software: you can redistribute it and/or modify
@@ -33,15 +35,54 @@ test -x /usr/bin/xxd || die "Requires xxd (vim-common)"
 # ---------------------------------------------------------------------------
 usage() {
   cat <<- EOF
-	$(basename $0) [-c blocks] [-w width] <disk>
+	Usage: $(basename $0) [-c blocks] [-w width] <disk>
 	
 	Shows a hexdump of the header of the given disk.
 	
-	  -c blocks - show <blocks> (default 1 block of 1024 bytes)
-	  -w width - Hexdump with <width> (default 32)
+	Options:
+	 -c blocks   show <blocks> (default 1 block of 1024 bytes)
+	 -w width    Hexdump with <width> (default 32)
 	
 	EOF
 }
+
+version() {
+  local version=$(awk -F: '/^# Version / {sub(/ /,"",$NF) ; print $NF}' $0)
+  local author=$(awk -F: '/^# Author / {sub(/ /,"",$NF) ; print $NF}' $0)
+  local license=$(awk -F: '/^# License / {sub(/ /,"",$NF) ; print $NF}' $0)
+  case $license in
+    GPLv3+) local ltext="License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>." ;;
+    *)      local ltext="license $license (unknown)"
+  esac
+  cat <<- EOF
+	$(basename $0) ${version:-0.0}
+	Written by ${author:-<No Author>}, ${ltext}
+	@br
+	If you have suggestions for improvements in this tool, please send them along via the above address.
+	
+	Copyright (c) 2018 ${author% <*}
+	EOF
+  echo @br
+  echo This is free software: you are free to change and redistribute it.  There is NO WARRANTY, to the extent permitted by law.
+}
+
+mandump() {
+  test -x /usr/bin/help2man || exit 10
+  local desc=$(awk -F: '/^# Description/ {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local sect=$(awk -F: '/^# Section/     {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local manual=$(awk -F: '/^# Manual/    {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  local source=$(awk -F: '/^# Source/    {sub(/ /,"",$NF) ; print $NF; exit}' $0)
+  SOURCE_DATE_EPOCH=$(stat -c %Y $0); export SOURCE_DATE_EPOCH
+  help2man -N -n "$desc" -s "${sect:-1}" -S "${source:-Outrun}" -m "${manual:-Outrun manual}" $0 | sed "s/^@/\./"
+}
+
+case $1 in
+  -\?)       man $(basename $0) ; exit;;
+  --help)    usage   ; exit ;;
+  --version) version ; exit ;;
+  --mandump) mandump ; exit ;;
+esac
+
 #============================================================================
 # Functions
 # ---------------------------------------------------------------------------
@@ -55,7 +96,6 @@ while getopts ":hb:c:w:" OPT; do
       b) blksz=${OPTARG} ;;
       c) count=${OPTARG} ;;
       w) width=${OPTARG} ;;
-   \?|h) usage ; exit 0 ;;
   esac
 done
 shift $(expr $OPTIND - 1)

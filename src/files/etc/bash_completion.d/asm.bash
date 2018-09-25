@@ -1,8 +1,8 @@
 #============================================================================
-# Title              : asm.bash
-# Description        : bash_completion file for asm script
-# Author             : Bart Sjerps <bart@outrun.nl>
-# License            : GPLv3+
+# Title       : asm.bash
+# Description : bash_completion file for asm script
+# Author      : Bart Sjerps <bart@outrun.nl>
+# License     : GPLv3+
 # ---------------------------------------------------------------------------
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 # more details.
 # ---------------------------------------------------------------------------
 # Revision history:
+# 2018-09-21 : Removed DSSD support, added scaleio
 # 2016-10-20 : Added DSSD support
 # 2015-03-10 : Updated for Powerpath support
 # 2014-11-06 : Updated for new asm options
@@ -26,7 +27,7 @@ _asm() {
   lsvols() { awk '$1!="#" && NF==3 {print $1}' /etc/asmtab 2>/dev/null ; }
   lsdevs() {
     find /dev/mapper -type l 2>/dev/null
-    find /dev -maxdepth 1 -type b -name "sd[b-z]" -o -name "sd[a-z][a-z]" -o -name "emcpower*" -o -name "dssd[0-9][0-9][0-9][0-9]"
+    find /dev -maxdepth 1 -type b -name "sd[b-z]" -o -name "sd[a-z][a-z]" -o -name "emcpower*" -o -name "scini*"
   }
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"

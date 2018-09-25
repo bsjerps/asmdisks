@@ -1,6 +1,6 @@
 Name:		asmdisks
 Summary:	Replacement for Oracle ASMLib using UDEV
-Version:	1.4.4
+Version:	1.4.5
 Release:	1%{?prerel:.~%prerel}
 BuildArch:	noarch
 License:	GPLv3+
@@ -25,7 +25,7 @@ Also supports EMC Powerpath and EMC DSSD volumes.
 rm -rf %{buildroot}
 mkdir %{buildroot}
 
-%makeinstall
+%make_install
 
 %files
 %defattr(0444,root,root)
@@ -33,9 +33,7 @@ mkdir %{buildroot}
 %doc /usr/share/doc/%{name}/README
 %defattr(0644,root,root)
 /etc/bash_completion.d/asm.bash
-/usr/share/man/man1/asm.1.gz
-/usr/share/man/man1/asmstat.1.gz
-/usr/share/man/man1/wipedisk.1.gz
+/usr/share/man/man1/*.gz
 %defattr(0755,root,root)
 /usr/bin/asm
 /usr/bin/asmstat
