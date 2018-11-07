@@ -1,0 +1,38 @@
+* Wed Nov 07 Bart Sjerps <bart@outrun.nl> 1.4.5.1
+- List of changes to asm:
+
+2018-11-07 : Change rpmbuild process, added docs
+2018-08-20 : Embedded manpage, removed DSSD support
+2018-04-06 : Add $PATH to support remote and scripted execution
+2017-12-14 : Bugfix for import function
+2017-10-04 : Bugfix for SCSI id's with whitespace (Linux TGTD)
+2017-09-13 : AWK Bugfix for SCSI id's starting with '0'
+2017-03-14 : ScaleIO support
+2017-01-30 : bugfix for rename
+2016-11-09 : DSSD udev bugfix
+2016-10-19 : Overhaul, many fixes and improvements
+2016-09-11 : EL7 support, bootdisk detection & tempdir usage
+2016-08-18 : Added EMC DSSD support, output for larger volume sizes
+2015-03-10 : Support for EMC Powerpath
+2015-03-05 : Rewrite of listdisks & create, added multi option
+2015-02-24 : Added TAB separator option for scripting, small bugfix
+2014-11-06 : Added import, rename and -h/-? option
+2014-10-22 : Created
+
+- List of changes to asmstat:
+2018-11-07 : Change man pages, build process
+2016-10-20 : Minor update
+2015-03-08 : Fixed alignment
+2014-10-24 : Updated template
+2014-05-02 : Created
+
+- List of changes to diskheader:
+2018-11-07 : Change man pages, build process
+2017-02-01 : First version
+
+- List of changes to wipedisk:
+2018-11-07 : Change man pages, build process
+2016-10-20 : Update
+2014-10-27 : Bugfix, added nowait
+2014-10-22 : Created
+

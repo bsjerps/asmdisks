@@ -1,7 +1,7 @@
 Name:		asmdisks
 Summary:	Replacement for Oracle ASMLib using UDEV
-Version:	1.4.5
-Release:	1%{?prerel:.~%prerel}
+Version:	1.4.5.1
+Release:	1%{?dtap}
 BuildArch:	noarch
 License:	GPLv3+
 Group:		Outrun/Extras
@@ -17,23 +17,26 @@ It is an alternative to Oracle ASMLib.
 You can use a combination of entire disks, partitions or mapper
 (including multipath) devices to configure as block devices for
 Oracle ASM (or other purposes such as destructive IOPS performance testing)
-Also supports EMC Powerpath and EMC DSSD volumes.
+Also supports DellEMC Powerpath (emcpower) and DellEMC ScaleIO (scini) volumes.
+
 %prep
 %setup -q -n %{name}
 
 %install
 rm -rf %{buildroot}
-mkdir %{buildroot}
 
 %make_install
 
+install -m 0755 -d %{buildroot}/usr/bin
+
+install -m 0755 -pt %{buildroot}/usr/bin bin/*
+
 %files
 %defattr(0444,root,root)
-%doc /usr/share/doc/%{name}/COPYING
-%doc /usr/share/doc/%{name}/README
+%doc /usr/share/doc/%{name}/*
 %defattr(0644,root,root)
 /etc/bash_completion.d/asm.bash
-/usr/share/man/man1/*.gz
+/usr/share/man/man1/*
 %defattr(0755,root,root)
 /usr/bin/asm
 /usr/bin/asmstat
