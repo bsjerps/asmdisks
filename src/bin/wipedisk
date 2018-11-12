@@ -13,6 +13,8 @@ case $1 in
   -\?|--help) man $(basename $0) ; exit ;;
 esac
 
+die() { echo "$(basename $0): [die] $@" >&2 ; exit 10 ; }
+
 #============================================================================
 # Main section - parsing options etc
 # ---------------------------------------------------------------------------
@@ -23,13 +25,12 @@ while getopts ":hfn" OPT; do
   esac
 done
 shift $(expr $OPTIND - 1)
-test $# -lt 1 && { usage ; exit 10 ; }
+test $# -lt 1 && die "no parameters"
 
 if [ "$FORCE" == "Y" ]; then
   DISK=${1:-nodisk}
   if [ ! -b $DISK ]; then
-    echo "$DISK not found"
-    exit 1
+    die "$DISK not found"
   fi
   BKUP=$(echo $DISK | tr '/' '_')
   echo "Backing up 1st MB of $DISK in /tmp/$BKUP, restore with dd if=/tmp/$BKUP of=/dev/$DISK bs=1M count=1"

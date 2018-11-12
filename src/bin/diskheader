@@ -30,7 +30,7 @@ while getopts ":hb:c:w:" OPT; do
 done
 shift $(expr $OPTIND - 1)
 
-test -z "$1" && usage && exit
+test -z "$1" && die "no disk specified"
 test -b "$1" || die "$1 is not a block device"
 
 dd if="$1" bs=${blksz:-1024} count=${count:-1} status=none | xxd -c ${width:-32}
