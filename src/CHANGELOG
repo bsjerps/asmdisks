@@ -4,6 +4,7 @@
 * Wed Nov 07 Bart Sjerps <bart@outrun.nl> 1.4.5.1
 - List of changes to asm:
 
+2018-11-23 : Overhaul: replace /sys/block/ parsing with lsblk, sanitize with shellcheck
 2018-11-07 : Change rpmbuild process, added docs
 2018-08-20 : Embedded manpage, removed DSSD support
 2018-04-06 : Add $PATH to support remote and scripted execution
