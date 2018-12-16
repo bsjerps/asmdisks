@@ -1,9 +1,6 @@
-* Wed Nov 12 Bart Sjerps <bart@outrun.nl> 1.4.5.2
-- Fix usage/no parameters
-
-* Wed Nov 07 Bart Sjerps <bart@outrun.nl> 1.4.5.1
 - List of changes to asm:
 
+2018-12-24 : Improve list option, add asm-menu
 2018-11-23 : Overhaul: replace /sys/block/ parsing with lsblk, sanitize with shellcheck
 2018-11-07 : Change rpmbuild process, added docs
 2018-08-20 : Embedded manpage, removed DSSD support

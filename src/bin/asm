@@ -269,12 +269,29 @@ scandisks() {
   udevupdate
 }
 
+devtype() {
+  local dev id
+  dev=/dev/"${1#*/dev/}"
+  test -b "$dev" || return 0
+  cmp -s <(dd if="$dev" bs=8k count=1 status=none) <(dd if=/dev/zero bs=8k count=1 status=none) \
+    && echo "blank" && return
+  id=$(blkid -p -o udev "$dev" | awk -F= '/ID_PART_TABLE_TYPE/ || /ID_FS_TYPE/ {print $NF ; exit; }')
+  case $id in
+    dos|gpt|swap)      echo "$id" ;;
+    LVM2_member)       echo "lvm" ;;
+    linux_raid_member) echo "raid" ;;
+    oracleasm)         echo "asm" ;;
+    xfs|ext3|ext4)     echo "$id" ;;
+    *)                 echo "unknown" ;;
+  esac
+}
+
 
 # List functions
 printvol() {
   case $SEPARATOR in
-    T) printf "%s\t%s\t%s\n"       "$@" ;;
-    *) printf "%-20s %11s %-20s\n" "$@" ;;
+    T) printf "%s\t%s\t%s\t%s\n"        "$@" ;;
+    *) printf "%-20s %-11s %-8s %8s\n" "$@" ;;
   esac
 }
 printdisk() {
@@ -291,7 +308,6 @@ mpinfoprint() {
   esac
 }
 
-
 listvol() {
   local vol dev size
   local -i bytes
@@ -301,11 +317,11 @@ listvol() {
     read bytes < <(lsblk -nbdo size "$dev")
     read size < <(bc <<< "scale=1;$bytes/1073741824")
   fi
-  printvol "${vol//oracleasm\//}" "${size:--}" "${dev:--}"
+  printvol "${vol//oracleasm\//}" "${dev:--}" "$(devtype $dev)" "${size:--}"
 }
 
 listvols() {
-  test -z "$NOHEAD" && printvol Volume Size Devname
+  test -z "$NOHEAD" && printvol Volume Device Type Size
   while IFS= read -r vol
   do
     listvol "$vol"
@@ -328,23 +344,7 @@ listdisk() {
             target=$(/sbin/powermt display dev="$dev" 2>/dev/null | awk -F= '/Pseudo name/ {print $2}') ;;
     *)      return ;;
   esac
-  if test -r /dev/"$dev" ; then
-    if cmp -s <(dd if=/dev/"$dev" bs=8k count=1 status=none) <(dd if=/dev/zero bs=8k count=1 status=none); then
-      disktype=blank
-    else
-      id=$(blkid -p -o udev /dev/"$dev" | awk -F= '/ID_PART_TABLE_TYPE/ || /ID_FS_TYPE/ {print $NF ; exit; }')
-      case $id in
-        dos|gpt|swap)      disktype="$id" ;;
-        LVM2_member)       disktype="lvm" ;;
-        linux_raid_member) disktype="raid" ;;
-        oracleasm)         disktype="asm" ;;
-        xfs|ext3|ext4)     disktype="$id" ;;
-        *)                 disktype="unknown" ;;
-      esac
-    fi
-  else
-    disktype="?"
-  fi
+  disktype=$(devtype $dev)
   size=$(lsblk -ndo size /dev/"$dev")
   printdisk "/dev/$dev" "${scsi:-[-]}" "${size}" "${disktype:--}" "${target:--}"
 }
@@ -356,24 +356,11 @@ listdisks() {
 }
 
 mpinfo() {
-  local device=$1 dev size realpath fstype disktype mpvol
+  local device=$1 dev size realpath disktype mpvol
   dev=$(dmsetup ls -o blkdevname | awk -v MP="$device" '$1==MP {print $2}'|tr -d '()')
   mpvol=$(multipath -ll -v 1 /dev/mapper/"$device")
   size=$(lsblk -ndo size /dev/"$dev")
-  ptable=$(blkid -p -o udev /dev/"$dev" | awk -F= '$1=="ID_PART_TABLE_TYPE" {print $2}'|head -1)
-  fstype=$(blkid -p -o udev /dev/"$dev" | awk -F= '$1=="ID_FS_TYPE" {print $2}'|head -1)
-  if [ "$ptable" == "dos" ]; then disktype="dos"
-  elif [ "$ptable" == "gpt" ]; then disktype="gpt"
-  else
-    case $fstype in
-      LVM2_member)       disktype="lvm" ;;
-      linux_raid_member) disktype="raid" ;;
-      oracleasm)         disktype="asm" ;;
-      xfs|ext*)          disktype="$fstype" ;;
-      "")                disktype="blank" ;;
-      *)                 disktype="unknown" ;;
-    esac
-  fi
+  disktype=$(devtype "$dev")
   realpath=$(getlink "$dev")
   mpinfoprint "$dev" "[$mpvol]" "${size}" "${disktype:-blank}" "${realpath:--}"
 }
@@ -402,10 +389,10 @@ shift $((OPTIND - 1))
 ACTION=${1:-none}; shift
 
 case $ACTION in
-  none)             listdisks ; exit $? ;;
-  listdisks|disks)  listdisks ; exit $? ;;
-  list)		        listvols ; exit $? ;;
-  dump)             cat $rulesfile ; exit $? ;;
+  none)            listdisks ; exit $? ;;
+  listdisks|disks) listdisks ; exit $? ;;
+  list)            listvols ; exit $? ;;
+  dump)            cat $rulesfile ; exit $? ;;
 esac
 
 (($(id -u)==0)) || die "Run as root"

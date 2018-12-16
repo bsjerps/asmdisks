@@ -1,6 +1,6 @@
 Name:		asmdisks
 Summary:	Replacement for Oracle ASMLib using UDEV
-Version:	1.4.6.0
+Version:	1.4.7.0
 Release:	1%{?dtap}
 BuildArch:	noarch
 License:	GPLv3+
@@ -39,6 +39,7 @@ install -m 0755 -pt %{buildroot}/usr/bin bin/*
 /usr/share/man/man1/*
 %defattr(0755,root,root)
 /usr/bin/asm
+/usr/bin/asm-menu
 /usr/bin/asmstat
 /usr/bin/wipedisk
 /usr/bin/diskheader
