@@ -309,7 +309,7 @@ mpinfoprint() {
 }
 
 listvol() {
-  local vol dev size
+  local vol dev= size
   local -i bytes
   vol=$1
   if [[ -e /dev/$vol ]]; then
