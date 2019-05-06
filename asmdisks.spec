@@ -1,6 +1,6 @@
 Name:		asmdisks
 Summary:	Replacement for Oracle ASMLib using UDEV
-Version:	1.4.7.1
+Version:	1.4.7.2
 Release:	1%{?dtap}
 BuildArch:	noarch
 License:	GPLv3+
@@ -24,17 +24,23 @@ Also supports DellEMC Powerpath (emcpower) and DellEMC ScaleIO (scini) volumes.
 
 %install
 rm -rf %{buildroot}
-
-%make_install
-
+install -m 0755 -d %{buildroot}/etc
 install -m 0755 -d %{buildroot}/usr/bin
+install -m 0755 -d %{buildroot}/usr/share/doc/%{name}
+install -m 0755 -d %{buildroot}/usr/share/man/man1
 
-install -m 0755 -pt %{buildroot}/usr/bin bin/*
+cp -pr etc/*    %{buildroot}/etc
+cp -p  bin/*    %{buildroot}/usr/bin
+cp -p  doc/*    %{buildroot}/usr/share/doc/%{name}
+cp -p  man1/*   %{buildroot}/usr/share/man/man1
+
+touch %{buildroot}/etc/asmtab
 
 %files
 %defattr(0444,root,root)
 %doc /usr/share/doc/%{name}/*
 %defattr(0644,root,root)
+%ghost /etc/asmtab
 /etc/bash_completion.d/asm.bash
 /usr/share/man/man1/*
 %defattr(0755,root,root)
