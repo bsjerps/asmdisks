@@ -290,13 +290,13 @@ devtype() {
 # List functions
 printvol() {
   case $SEPARATOR in
-    T) printf "%s\t%s\t%s\t%s\n"        "$@" ;;
+    T) printf "%s\t%s\t%s\t%s\n"       "$@" ;;
     *) printf "%-20s %-11s %-8s %8s\n" "$@" ;;
   esac
 }
 printdisk() {
   case $SEPARATOR in
-    T) printf "%s\t%s\t%s\t%8s\t%s\n"     "$@" ;;
+    T) printf "%s\t%s\t%s\t%s\t%s\n"      "$@" ;;
     *) printf "%-15s %10s %10s %-8s %s\n" "$@" ;;
   esac
 }
