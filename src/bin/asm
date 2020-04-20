@@ -189,11 +189,12 @@ importdisks() {
   for dev in $(asm -t disks | awk '$4=="asm" && $5=="-" {print $1}') ; do
     for i in {1..99} ; do
       volname=$(printf "vol%02d\n" $i)
-      [[ ! -b /dev/oracleasm/${volname} ]] && break
+      grep -q "^${volname} " /etc/asmtab || {
+        msg "importing $dev as /dev/oracleasm/$volname"
+        createdisk "$volname" "$dev"
+        break
+      }
     done
-    msg "importing $dev as /dev/oracleasm/$volname"
-    createdisk "$volname" "$dev"
-    sleep 1
   done
 }
 
