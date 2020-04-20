@@ -316,8 +316,10 @@ listvol() {
     dev=$(readlink -f /dev/"$vol")
     read bytes < <(lsblk -nbdo size "$dev")
     read size < <(bc <<< "scale=1;$bytes/1073741824")
+    printvol "${vol//oracleasm\//}" "${dev:--}" "$(devtype $dev)" "${size:--}"
+  else
+    printvol "${vol//oracleasm\//}" "${dev:--}" "-" "${size:--}"
   fi
-  printvol "${vol//oracleasm\//}" "${dev:--}" "$(devtype $dev)" "${size:--}"
 }
 
 listvols() {
