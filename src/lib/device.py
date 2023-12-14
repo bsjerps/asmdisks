@@ -136,6 +136,8 @@ class Device():
                     return True
                 else:
                     return False
+        except OSError:
+            pass
         except ValueError:
             pass
 
