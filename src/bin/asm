@@ -1,416 +1,259 @@
-#!/bin/bash
-#============================================================================
-# Title       : asm
-# Description : Manage disks and volumes for Oracle ASM
-# Author      : Bart Sjerps <bart@outrun.nl>
-# License     : GPLv3+
-# ---------------------------------------------------------------------------
+#!/usr/bin/env python3
 
-set -u
-readonly progname=$(basename "$0") 
-rc=0
+"""\
+ASMDisks - Manage Linux disks using UDEV
+Copyright (c) 2023 - Bart Sjerps <bart@dirty-cache.com>
+URL: https://github.com/bsjerps/asmdisks
+License: GPLv3+
+"""
 
-log()  { logger -t "$progname" "$*" ; }
-msg()  { printf "%s: [%s] %s\n" "$progname" msg  "$*" ; } 
-err()  { printf "%s: [%s] %s\n" "$progname" err  "$*" >&2 ; }
-die()  { printf "%s: [%s] %s\n" "$progname" die  "$*" >&2 ; exit "${rc:-10}" ; }
-quit() { printf "%s: [%s] %s\n" "$progname" quit "$*" ; exit 0 ; }
-dbg()  { printf "%s: [%s] %s\n" "$progname" "line ${BASH_LINENO[0]}" "$*" >&2 ; }
+__version__   = '2.0.0'
 
-# Translate -? or --help into manpage
-case "${1-}" in
-  -\?|--help) man "$progname" ; exit ;;
-esac
+helptext = """
+asm is a replacement for the 'oracleasm' command provided via Oracle ASMlib.
+It creates and manages devices using Linux UDEV, by default created as symlinks
+in /dev/oracleasm with owner 'grid', group 'asmdba' and mode 0660.
+The device configuration is stored in a sqlite database.
 
-#============================================================================
-# Initialization - Logging - Etc.
-# ---------------------------------------------------------------------------
+"""
 
-rulesfile=/etc/udev/rules.d/99-asm.rules
+import sys
+sys.dont_write_bytecode = True
+sys.path.append('/usr/lib/asmdisks')
 
-# Ensure it works from a scripted or remote ssh environment
-export PATH=/usr/sbin:/usr/bin:/bin:/sbin
+import os, re, json, argparse, pwd, grp
+from sqlite3 import OperationalError
 
-# Create temporary workdir - cleanup the mess when script ends good or bad
-readonly WORKDIR=$(/bin/mktemp --tmpdir -d)
-cleanup() { /bin/rm -rf "${WORKDIR:-/none}" ; }
-trap cleanup EXIT INT TERM HUP
+from sqlitedb import Database
+from rulesfile import RulesFile
+from device import Device
+from pretty import Pretty
 
-test -x /usr/bin/bc     || die "bc not installed"
-test -x /usr/bin/lsscsi || die "lsscsi not installed"
-test -x /sbin/udevadm   || die "udevadm not found"
+sqlitedb   = '/etc/asmtab.db'
+exportfile = '/tmp/asmdisks.json'
+rulespath  = '/etc/udev/rules.d/98-asm.rules'
 
-NOHEAD=""
-SEPARATOR=""
+db = Database(sqlitedb)
 
-#============================================================================
-# Functions
-# ---------------------------------------------------------------------------
+def regsearch(pat, line):
+    r = re.search(pat, line)
+    if r:
+        return r.group(1)
 
-# Get device info - given a /dev/<device>
-getdriver() { awk -vm="$(lsblk -nrdo MAJ:MIN "$1" | cut -d: -f1)" 'f==1 && $1==m {print $NF} /Block devices/ {f=1}' /proc/devices ; }
+def rescan(args):
+    print('Rescanning SCSI devices')
+    Device.rescan()
+    
+def reload():
+    print('Updating UDEV rules')
+    RulesFile.reload()
 
-# Get existing symlink
-getlink() { printf "%s\n" $(udevadm info --root --query=symlink --path=/block/"$1") | awk -F/ '$3 !~ "disk|block|mapper" {print ; exit} ' ; }
+def listdisks(args):
+    header = ('Device','SCSI','Size','Type','Target')
+    data = []
+    for devpath in Device.getdisks():
+        dev = Device(f'/dev/{devpath}')
+        data.append((dev.dev, dev.scsi, dev.size, dev.contents, dev.symlink))
+    
+    p = Pretty(header, data)
+    p.print(args)
 
-# Get diskstrings from asmtab including default "oracleasm"
-diskstrings() { awk 'BEGIN {print "oracleasm"; } $1 ~ "/" {print substr($1,1,match($1,"/")-1)}' /etc/asmtab | sort | uniq ; }
+def listvolumes(args):
+    header, data = db.volumes.report('volname, disktype, identifier', orderby='volname')
+    p = Pretty(header, data)
+    p.print(args)
 
-# Update udev rules
-udevupdate() { 
-  udevadm control --reload-rules
-  udevadm trigger
-}
+def createdisk(args):
+    dev        = Device(args.dev)
+    driver     = dev.driver
+    identifier = dev.serial
+    if not dev.contents in ('asm','blank'):
+        raise ValueError("Disk is not empty or an ASM disk")
+    db.volumes.insert(volname=args.vol, disktype=driver, identifier=identifier)
+    rebuild(args)
 
-# get SCSI identifier
-getscsi() {
-  read dev < <(echo "$1" | sed 's/[0-9]$//')
-  test -x /lib/udev/scsi_id || die "scsi_id command not found"
-  /lib/udev/scsi_id -ug "$dev" || die "scsi_id unavailable for $1"
-}
+def deletedisk(args):
+    db.volumes.delete(volname=args.vol)
+    rebuild(args)
+   
+def renamedisk(args):
+    if not args.force:
+        raise ValueError('Force flag required')
+    db.volumes.update({ 'volname': args.newname }, volname=args.vol)
+    rebuild(args)
 
-# Find the bootdisk. /boot must be mounted for this to work
-bootdisk() { 
-  grep -qw "^BOOTDISK" /etc/asmtab && awk -F= '$1=="BOOTDISK" {gsub(/\/dev\//,"") ; print "/dev/" $2 }' /etc/asmtab && return 0
-  grep -qw "/boot" /proc/mounts || return 1
-  awk '$2=="/boot" {print $1}' /proc/mounts | tr -d '0-9' 
-}
+def genvol():
+    for i in range(1,99):
+        newname = f'vol{i:02}'
+        r = db.volumes.get(volname=newname)
+        if not r:
+            return newname
 
-# Rescan all SCSI buses for new devices
-rescan() { for scsi in /sys/class/scsi_host/*/scan ; do echo - - - > "$scsi" ; done ; }
+def exportall(args):
+    info = {}
+    info['application'] = 'asmdisks'
+    info['version'] = __version__
+    info['metadata'] = {}
+    info['volumes'] = []
+    r = db.metadata.get(id=0)
+    info['metadata'] = { k: getattr(r, k) for k in r._fields}
+    for r in db.volumes.select('volname,disktype,identifier'):
+        info['volumes'].append({ k: getattr(r, k) for k in r._fields})
 
-createconf() {
-  if [ ! -f /etc/asmtab ]; then
-    cat <<- EOF > /etc/asmtab
-	# /etc/asmtab - configuration file for asmdisks
-	# Definitions for IORate testing - volumes under /dev/iorate will have root:iops @ mode 0601
-	# PATH=iorate:root:iops:0660
-	#
-	# Specify bootdisk if not auto detected. This device will never be touched by "$progname"
-	# BOOTDISK=/dev/sdc
-	#
-	# Alternative default permissions for /dev/oracleasm (uncomment):
-	# PATH=oracleasm:oracle:dba:0660
-	#
-	# This file keeps track of udev disk mappings for asmdisk(1)
-	# You should normally not have to edit this file directly
-	# Use asm(1) instead.
-	#
-	# On each line:
-	#
-	# label type identifier
-	# where
-	# label: diskstring/volume name (default diskstring is oracleasm and can be omitted)
-	# type:  one of scsi, part, part=scsi disk partition, ppath, scini,
-	#   mapper (scsi=entire SCSI disk, part=scsi disk partition, mapper=linux disk mapper device)
-	# label: scsi_id, scsi_id:partition, mapper_name, vol_id etc
-	#
-	# Ownerships and permissions can be specified for a diskstring:
-	# PATH=diskstring:owner:group:mode
-	# default is oracleasm:grid:asmdba:0660
-	#
-	# example:
-	# vol1 scsi 36000c29f825cd85b5fcc70a1aadebf0c   # entire SCSI disk
-	# vol2 part 36000c298afa5c31b47fe76cbd1750937:1 # partition 1 of entire SCSI disk
-	# vol3 mapper mpathb                            # /dev/mapper/mpathb (multipath device)
-	# vol4 ppath emcpowerx                          # /dev/emcpowerx (EMC Powerpath device)
-	# vol5 scini 6e85d4fe3b125edc-6f99ffeb00000000  # ScaleIO volume
-	# iorate/test1 mapper iops-vol1                 # LV vol1 on VG iops, will be mapped as /dev/iorate/test1
-	# -----------------------------------------------
-	EOF
-    chmod 755 /etc/asmtab
-  fi
-}
+    with open(exportfile, 'w') as f:
+        f.write(json.dumps(info, indent=2))
 
-# Defines a new volume in asmtab and enables it via UDEV
-createdisk() {
-  (($#==2)) || die "provide 2 parameters"
-  test -b "$2"  || die "Nonexistent block device $2"
-  local label=$1 device driver diskstring dtype fstype target append=
-  device=$(readlink -f "$2") 
-  driver=$(getdriver "$device")
-  diskstring=$(awk -F/ 'NF>1 {print $1 } NF==1 { print "oracleasm"}' <<< $label)
+def importall(args):
+    with open(exportfile) as f:
+        info = json.loads(f.read())
+    
+    db.metadata.update(info['metadata'], id=0)
+    for volinfo in info['volumes']:
+        db.volumes.insert(**volinfo)
 
-  case $(lsblk -dno type "$device") in
-    part) append=:$(($(lsblk -drno MAJ:MIN "$device" | cut -d: -f2)%16)) ;;
-  esac
+def importasm(args):
+    for devpath in Device.getdisks():
+        dev = Device(f'/dev/{devpath}')
+        if dev.contents == 'asm':
+            newvol = genvol()
+            db.volumes.insert(volname=newvol, disktype=dev.driver, identifier=dev.serial)
+    rebuild(args)
 
-  awk -v vol="$label" '$1 !~ "#" && NF==3 && $1==vol { exit 1 ; }' /etc/asmtab || die "Volume $label already exists in asmtab!"
-  
-  test -b "/dev/${diskstring}/$label" && die "Volume already exists as $diskstring/$label"
+def importrules(args):
+    with open(args.rulesfile) as f:
+        data = f.read()
+    for r, symlink in re.findall(r'OWNER=\S+, GROUP=\S+, MODE=\S+, (.*), SYMLINK\+="(.*)"', data, re.M):
+        volname = symlink.replace('oracleasm/','')
+        m1 = re.match('KERNEL=="sd\*", ENV{DEVTYPE}=="disk", ENV{ID_SERIAL}=="(\S+)"', r)
+        m2 = re.match('ENV{ID_WWN}=="(\S+)"', r)
+        if m1:
+            serial = m1.group(1)
+            db.volumes.insert(volname=volname, disktype='sd', identifier=serial)
+        elif m2:
+            serial = m2.group(1)
+            db.volumes.insert(volname=volname, disktype='blkext', identifier=serial)
 
-  # Ask blkid for the fs type. Only unused and existing ASM volumes are allowed
-  fstype=$(blkid -p -o udev "$device" | awk -F= '$1=="ID_FS_TYPE" || $1 =="ID_PART_TABLE_TYPE" {print $2 ; exit ;}')
-  case "$fstype" in
-    "")	       ;;
-    oracleasm) ;;
-    *)         die "Device $device already in use: $fstype" ;;
-  esac
-  case $driver in
-    sd)            dtype=scsi   ; target=$(getscsi "$device")"${append}" ;;
-    device-mapper) dtype=mapper ; target=$(dmsetup info -c --noheadings -o name "$device") ;;
-    scini)         dtype=scini  ; target=$(/bin/emc/scaleio/drv_cfg --query_block_device_id --block_device "$device") ;;
-    power2)        dtype=ppath  ; target=$(/sbin/powermt display dev="${device##*/}" 2>/dev/null | awk -F= '/Pseudo name/ {print $2}')"${append}" ;;
-    *)             die "Unknown device type $driver" ;;
-  esac
-  test -z "$target" && die "Target ID not found (empty scsi id?)"
-  awk 'NF==3 && !/^#/ {print $3}' /etc/asmtab | grep -qs "$target" && die "Target $target already exists"
-  printf "%s %s %s\n" "$label" "$dtype" "$target" >> /etc/asmtab
-  scandisks
-}
+def rebuild(args):
+    rulesfile = RulesFile(db, rulespath)
+    rulesfile.save()
+    reload()
 
+def dump(args):
+    rulesfile = RulesFile(db, rulespath)
+    rulesfile.dump()
 
-# Delete disk from asmtab and update udev
-deletedisk() {
-  (($#==1)) || die "provide 1 parameter"
-  local label=${1:-none} diskstring
-  diskstring=$(awk -F/ 'NF>1 {print $1 } NF==1 { print "oracleasm"}' <<< "$label")
-  awk -vm="$1" '$1==m { f=1 ;} END { exit !f}' /etc/asmtab || die "Volume $label not found"
-  sed -i.bak -e "/^${label//\//\\/}\s/d" /etc/asmtab
-  rm -f /dev/"$diskstring/${label##*/}"
-  scandisks
-}
+def setup(args):
+    db.schema()
 
-# Rename a disk (volume) in asmtab and update
-renamedisk() {
-  (($#==2)) || die "provide 2 parameters"
-  local label=$1 newname=$2 diskstring
-  awk 'NF==3 && !/^#/ {print $1}' /etc/asmtab | grep -qws "$label"   || die "Volume $label does not exist"
-  awk 'NF==3 && !/^#/ {print $1}' /etc/asmtab | grep -qws "$newname" && die "Volume $newname already exists"
-  diskstring=$(awk -F/ 'NF>1 {print $1 }' <<< $label)
-  sed -i.bak -e "s|^\<${label}\>|${newname}|" /etc/asmtab
-  rm -f /dev/"${diskstring:-oracleasm}/${label##*/}"
-  scandisks
-}
+def configure(args):
+    if args.show:
+        meta = db.metadata.get(id=0)
+        print(f"diskstring: /dev/{meta.diskstring}, user: {meta.user}, group: {meta.grp}, mode: {oct(meta.mode)[2:]}")
+    elif args.reset:
+        db.metadata.update({ 'user': 'grid', 'grp': 'asmdba', 'diskstring': 'oracleasm', 'mode': 0o660 }, id=0)
+    elif args.user:
+        try:
+            pwd.getpwnam(args.user)
+        except:
+            raise ValueError('User does not exist')
+        db.metadata.update({ 'user': args.user }, id=0)
+    elif args.group:
+        try:
+            grp.getgrnam(args.group)
+        except:
+            raise ValueError('Group does not exist')
+        db.metadata.update({ 'grp': args.group }, id=0)
+    elif args.diskstring:
+        if not args.diskstring.startswith('/dev'):
+            raise ValueError("Must start with /dev")
+        _, _, basename = args.diskstring.partition('/dev/')
+        if not basename.replace('/','').isidentifier():
+            raise ValueError(f"Bad dirname {basename}")
+        db.metadata.update( { 'diskstring': basename }, id=0)
 
-# Create a volume from every unassigned disk with an ASM label
-importdisks() {
-  local dev volname
-  for dev in $(asm -t disks | awk '$4=="asm" && $5=="-" {print $1}') ; do
-    for i in {1..99} ; do
-      volname=$(printf "vol%02d\n" $i)
-      grep -q "^${volname} " /etc/asmtab || {
-        msg "importing $dev as /dev/oracleasm/$volname"
-        createdisk "$volname" "$dev"
-        break
-      }
-    done
-  done
-}
+def destroy(args):
+    if not args.force:
+        raise ValueError('Force flag required')
+    db.destroy()
 
-# build new rulesfile from asmtab and activates it
-udevadd() {
-  local vol="$1" dtype="$2" ID="$3" owner group mode diskstring
-  diskstring=$(awk -F/ 'NF>1 {print $1 } NF==1 { print "oracleasm"}' <<< $vol)
-  owner=$(awk -F'[=:]' -v DS="$diskstring" 'BEGIN { r="grid"   } $1 !~ "#" && $1=="PATH" && $2==DS { r=$3 } END { print r }' /etc/asmtab)
-  group=$(awk -F'[=:]' -v DS="$diskstring" 'BEGIN { r="asmdba" } $1 !~ "#" && $1=="PATH" && $2==DS { r=$4 } END { print r }' /etc/asmtab)
-  mode=$(awk  -F'[=:]' -v DS="$diskstring" 'BEGIN { r="0660"   } $1 !~ "#" && $1=="PATH" && $2==DS { r=$5 } END { print r }' /etc/asmtab)
-  if echo "$ID" | grep -q ":" ; then
-    case $dtype in
-      ppath) dtype=pppart ;;
-          *) dtype=part ;;
-    esac
-  fi
-  case $dtype in
-    mapper) test ! -L /dev/mapper/"$ID" && msg "Mapper volume $vol ($ID) does not exist, skipping" && return
-            case $(dmsetup info -c "$ID" --noheadings -o subsystem) in
-              LVM|mpath|part*) ;;
-              *) die "unknown disk mapper subsystem type for $vol" ;;
-            esac
-            ;;
-  esac
-  {
-  printf 'OWNER="%s", GROUP="%s", MODE="%s", ' "$owner" "$group" "$mode"
-  case "$dtype" in
-    scsi)   printf 'KERNEL=="sd*", ENV{DEVTYPE}=="disk", ENV{ID_SERIAL}=="%s", ' "$ID" ;;
-    part)   printf 'ENV{DEVTYPE}=="partition", ATTR{partition}=="%s", ENV{ID_SERIAL}=="%s", ' "${ID#*:}" "${ID%:*}" ;;
-    pppart) printf 'ENV{DEVTYPE}=="partition", KERNEL=="%s", ' "${ID%:*}${ID#*:}" ;;
-    ppath)  printf 'ENV{DEVTYPE}=="disk", KERNEL=="%s", ' "$ID" ;;
-    scini)  printf 'KERNEL=="scini*", PROGRAM="/bin/emc/scaleio/drv_cfg --query_block_device_id --block_device /dev/%%k", RESULT=="%s", ' "$ID" ;;
-    mapper) printf 'ENV{DM_NAME}=="%s", ' "$ID" ;;
-    *)      die "unknown asmudev volume type $dtype" ;;
-  esac
-  printf 'SYMLINK+="%s"\n' "$diskstring/${vol##*/}"
-  } >> "$WORKDIR/99-asm.rules"
-}
+def main():
+    formatter = lambda prog: argparse.HelpFormatter(prog, max_help_position=40)
+    parser = argparse.ArgumentParser(epilog = helptext, description='Manage disks and volumes for Oracle ASM', formatter_class=formatter)
+    subparsers = parser.add_subparsers(title='commands', dest='cmd')
 
-scandisks() {
-  local bootdisk
-  bootdisk=$(bootdisk | awk -F/ '{print $NF}')
-  cat <<- EOF > $WORKDIR/99-asm.rules
-	# This file was automatically generated by the /usr/bin/asm program.
-	#
-	# It's recommended not to edit this file directly as it will be overwritten
-	# with each run of the "asm" command.
-	# Direct edit the file /etc/asmtab instead.
-	
-	SUBSYSTEM!="block", GOTO="asmudev_end"
-	
-	# Don't touch the bootdisk (/dev/${bootdisk:-notfound})
-	ENV{DEVPATH}=="*/block/${bootdisk:-none}", GOTO="asmudev_end"
-	
-	# force group "disk" for all disks not in asmtab
-	# to prevent disks having wrong permissions after being deleted from asmtab
-	GROUP="disk", ENV{DEVTYPE}=="disk", KERNEL=="sd*"
-	GROUP="disk", ENV{DEVTYPE}=="partition", KERNEL=="sd*"
-	
-	EOF
-  awk 'NF == 3 && $1 !~ "#"' /etc/asmtab | sort | while read vol type id ; do
-    udevadd "$vol" "$type" "$id"
-  done
-  cat <<- EOF >> $WORKDIR/99-asm.rules
-	
-	LABEL="asmudev_end"
-	EOF
+    parser_rescan    = subparsers.add_parser('rescan',      help='Rescan Linux devices')
+    parser_list      = subparsers.add_parser('list',        help='List volumes', description='List items')
+    parser_disks     = subparsers.add_parser('disks',       help='List disks', description='List Disks')
+    parser_create    = subparsers.add_parser('createdisk',  help='Create UDEV disk')
+    parser_delete    = subparsers.add_parser('deletedisk',  help='Delete UDEV disk')
+    parser_rename    = subparsers.add_parser('renamedisk',  help='Rename UDEV disk')
+    parser_export    = subparsers.add_parser('export',      help=f'Export to {exportfile}')
+    parser_import    = subparsers.add_parser('import',      help=f'Import from {exportfile}')
+    parser_imprules  = subparsers.add_parser('importrules', help=f'Import from rulesfile')
+    parser_impasm    = subparsers.add_parser('importasm',   help='Import existing ASM disks')
+    parser_rebuild   = subparsers.add_parser('rebuild',     help='Rebuild UDEV rules file')
+    parser_dump      = subparsers.add_parser('dump',        help='Dump rulesfile')
+    parser_setup     = subparsers.add_parser('setup',       help='Setup asmdisks database')
+    parser_config    = subparsers.add_parser('configure',   help='Configure options')
+    parser_destroy   = subparsers.add_parser('destroy',     help='Destroy database')
+ 
+    parser_rescan.set_defaults(func=rescan)
+    parser_list.set_defaults(func=listvolumes)
+    parser_disks.set_defaults(func=listdisks)
+    parser_create.set_defaults(func=createdisk)
+    parser_delete.set_defaults(func=deletedisk)
+    parser_rename.set_defaults(func=renamedisk)
+    parser_export.set_defaults(func=exportall)
+    parser_import.set_defaults(func=importall)
+    parser_imprules.set_defaults(func=importrules)
+    parser_impasm.set_defaults(func=importasm)
+    parser_rebuild.set_defaults(func=rebuild)
+    parser_dump.set_defaults(func=dump)
+    parser_setup.set_defaults(func=setup)
+    parser_config.set_defaults(func=configure)
+    parser_destroy.set_defaults(func=destroy)
+    
+    group = parser_config.add_mutually_exclusive_group(required=True)
+    group.add_argument('--show',       help="Show configuration", action="store_true")
+    group.add_argument('--reset',      help="Switch to defaults", action="store_true")
+    group.add_argument('--user',       help="ASM disk owner [grid]", metavar='username')
+    group.add_argument('--group',      help="ASM disk group [asmdba]", metavar='groupname')
+    group.add_argument('--diskstring', help="ASM diskstring [/dev/oracleasm]", metavar='path')
 
-  cmp -s "$WORKDIR/99-asm.rules" ${rulesfile:-none} || {
-    echo Updating asm rules
-    cat "$WORKDIR/99-asm.rules" > ${rulesfile:-none}
-  }
-  udevupdate
-}
+    parser.add_argument('-V', '--version', action="store_true", help="Version and copyright info")
+    parser.add_argument('-t','--tabs',     action="store_true", help="Tab separated output")
+    parser.add_argument('-n','--nohead',   action="store_true", help="No headings (if -t)")
 
-devtype() {
-  local dev id
-  dev=/dev/"${1#*/dev/}"
-  test -b "$dev" || return 0
-  cmp -s <(dd if="$dev" bs=8k count=1 status=none) <(dd if=/dev/zero bs=8k count=1 status=none) \
-    && echo "blank" && return
-  id=$(blkid -p -o udev "$dev" | awk -F= '/ID_PART_TABLE_TYPE/ || /ID_FS_TYPE/ {print $NF ; exit; }')
-  case $id in
-    dos|gpt|swap)      echo "$id" ;;
-    LVM2_member)       echo "lvm" ;;
-    linux_raid_member) echo "raid" ;;
-    oracleasm)         echo "asm" ;;
-    xfs|ext3|ext4)     echo "$id" ;;
-    *)                 echo "unknown" ;;
-  esac
-}
+    parser_create.add_argument('vol', help="Volume name")
+    parser_create.add_argument('dev', help="Block device")
 
+    parser_delete.add_argument('vol', help="Volume name")
 
-# List functions
-printvol() {
-  case $SEPARATOR in
-    T) printf "%s\t%s\t%s\t%s\n"       "$@" ;;
-    *) printf "%-20s %-11s %-8s %8s\n" "$@" ;;
-  esac
-}
-printdisk() {
-  case $SEPARATOR in
-    T) printf "%s\t%s\t%s\t%s\t%s\n"      "$@" ;;
-    *) printf "%-15s %10s %10s %-8s %s\n" "$@" ;;
-  esac
-}
-mpinfoprint() {
-  test $# -eq 0 && set -- Device Multi Size Type Volume
-  case $SEPARATOR in
-    T) printf "%s\t%s\t%s\t%s\t%s\n"      "$@" ;;
-    *) printf "%-10s %10s %10s %-8s %s\n" "$@" ;;
-  esac
-}
+    parser_rename.add_argument('vol', help="Volume name")
+    parser_rename.add_argument('newname', help="New volume name")
+    parser_rename.add_argument('--force',   action="store_true", help="Required")
 
-listvol() {
-  local vol dev= size
-  local -i bytes
-  vol=$1
-  if [[ -e /dev/$vol ]]; then
-    dev=$(readlink -f /dev/"$vol")
-    read bytes < <(lsblk -nbdo size "$dev")
-    read size < <(bc <<< "scale=1;$bytes/1073741824")
-    printvol "${vol//oracleasm\//}" "${dev:--}" "$(devtype $dev)" "${size:--}"
-  else
-    printvol "${vol//oracleasm\//}" "${dev:--}" "-" "${size:--}"
-  fi
-}
+    parser_imprules.add_argument('rulesfile')
+    parser_import.add_argument('file')
 
-listvols() {
-  test -z "$NOHEAD" && printvol Volume Device Type Size
-  while IFS= read -r vol
-  do
-    listvol "$vol"
-  done < <(awk 'NF==3 && $1 !~ "#" { if ($1~"/") {print $1} else {print "oracleasm/"$1}}' /etc/asmtab)
-}
+    parser_destroy.add_argument('--force',   action="store_true", help="Required")
 
-# list disks for every device where device type is sd, scini or power2
-listdisk() {
-  local dev=$1 disktype scsi target size id mpath=
-  case $(getdriver "/dev/$dev") in
-    sd)     scsi=$(lsscsi -k | awk -v D=/dev/"$dev" '$NF==D {print $1}')
-            target=$(getlink "$dev")
-            mpath=$(lsblk -nl /dev/"$dev"|awk '$NF=="mpath" {print $1}')
-            test -n "$mpath" && target=$mpath
-            ;;
-    scini)  scsi="<scaleio>"
-            target=$(getlink "$dev")
-            ;;
-    power2) scsi="<power>"
-            target=$(/sbin/powermt display dev="$dev" 2>/dev/null | awk -F= '/Pseudo name/ {print $2}') ;;
-    *)      return ;;
-  esac
-  disktype=$(devtype $dev)
-  size=$(lsblk -ndo size /dev/"$dev")
-  printdisk "/dev/$dev" "${scsi:-[-]}" "${size}" "${disktype:--}" "${target:--}"
-}
+    args = parser.parse_args()
+    if args.version:
+        print(__doc__)
+        print(f'Version {__version__}')
+        sys.exit()
 
-listdisks() {
-  test -z "$NOHEAD" && printdisk Device SCSI Size Type Target
-  local dev
-  for dev in $(lsblk -ndo kname|sort) ; do listdisk "$dev" ; done
-}
+    try:
+        if args.cmd is None:
+            listdisks(args)
+        else:
+            args.func(args)
+    except OperationalError as e:
+        print(f"Database error: {e}")
+    except ValueError as e:
+        print(e)
+        sys.exit(10)
 
-mpinfo() {
-  local device=$1 dev size realpath disktype mpvol
-  dev=$(dmsetup ls -o blkdevname | awk -v MP="$device" '$1==MP {print $2}'|tr -d '()')
-  mpvol=$(multipath -ll -v 1 /dev/mapper/"$device")
-  size=$(lsblk -ndo size /dev/"$dev")
-  disktype=$(devtype "$dev")
-  realpath=$(getlink "$dev")
-  mpinfoprint "$dev" "[$mpvol]" "${size}" "${disktype:-blank}" "${realpath:--}"
-}
-
-# List all multipath volumes
-listmulti() {
-  test -z "$NOHEAD" && mpinfoprint
-  local d
-  if [ -x /sbin/multipath -a -f /etc/multipath.conf ]; then
-    for d in $(multipath -ll -v1|sort); do mpinfo "$d" ; done
-  fi
-}
-
-#============================================================================
-# Main section - parsing options etc
-# ---------------------------------------------------------------------------
-while getopts ":nt" OPT; do
-  case "$OPT" in
-    n) NOHEAD=Y ;;
-    t) SEPARATOR=T ; NOHEAD=Y ;;
-    *) die "Unknown option $OPTARG" ;;
-  esac
-done
-shift $((OPTIND - 1))
-
-ACTION=${1:-none}; shift
-
-case $ACTION in
-  none)            listdisks ; exit $? ;;
-  listdisks|disks) listdisks ; exit $? ;;
-  list)            listvols ; exit $? ;;
-  dump)            cat $rulesfile ; exit $? ;;
-esac
-
-(($(id -u)==0)) || die "Run as root"
-
-createconf
-
-case $ACTION in
-  rescan)           rescan ;;
-  createdisk)       createdisk "$@" ;;
-  deletedisk)       deletedisk "$@" ;;
-  renamedisk)       renamedisk "$@" ;;
-  import)           importdisks ;;
-  scandisks)        scandisks ;;
-  listmulti|multi)  listmulti ;;
-  bootdisk)         bootdisk ;;
-  *)                die "Unknown action" ;;
-esac
-
+if __name__ == '__main__':
+    main()

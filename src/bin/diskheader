@@ -2,7 +2,7 @@
 #============================================================================
 # Title       : diskheader
 # Description : Shows hexdump of the first 1k block of a disk
-# Author      : Bart Sjerps <bart@outrun.nl>
+# Author      : Bart Sjerps <bart@dirty-cache.com>
 # License     : GPLv3+
 # ---------------------------------------------------------------------------
 

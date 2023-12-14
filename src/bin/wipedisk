@@ -1,41 +1,58 @@
-#!/bin/bash
-#============================================================================
-# Title       : wipedisk
-# Description : Wipes first 1MB of a disk and makes backup in /tmp
-# Author      : Bart Sjerps <bart@outrun.nl>
-# Version     : 1.0
-# Manual      : asmdisks
-# License     : GPLv3+
-# ---------------------------------------------------------------------------
+#!/usr/bin/env python3
 
-# Translate -? or --help into manpage
-case $1 in
-  -\?|--help) man $(basename $0) ; exit ;;
-esac
+"""\
+wipedisk - Wipe the header of a block device
+Copyright (c) 2023 - Bart Sjerps <bart@dirty-cache.com>
+URL: https://github.com/bsjerps/asmdisks
+License: GPLv3+
+"""
 
-die() { echo "$(basename $0): [die] $@" >&2 ; exit 10 ; }
+import os, sys, stat, argparse
+from time import sleep
+from subprocess import run, CalledProcessError
 
-#============================================================================
-# Main section - parsing options etc
-# ---------------------------------------------------------------------------
-while getopts ":hfn" OPT; do
-  case "$OPT" in
-    f)  FORCE=Y ;;
-    n)  NOWAIT=Y ;;
-  esac
-done
-shift $(expr $OPTIND - 1)
-test $# -lt 1 && die "no parameters"
+desc = """\
+Wipes the header of a disk device with zeroes (by default, the first 1MiB).
+The force (-f) flag is required for safety. A backup of the wiped section is made in /tmp.
+A period of 5 seconds is waited before the actual wipe (to allow CTRL-C abort)
+"""
 
-if [ "$FORCE" == "Y" ]; then
-  DISK=${1:-nodisk}
-  if [ ! -b $DISK ]; then
-    die "$DISK not found"
-  fi
-  BKUP=$(echo $DISK | tr '/' '_')
-  echo "Backing up 1st MB of $DISK in /tmp/$BKUP, restore with dd if=/tmp/$BKUP of=/dev/$DISK bs=1M count=1"
-  dd if=$1 of=/tmp/backup_$BKUP bs=1M count=1
-  echo "Wiping 1st mb of disk $DISK"
-  [[ -z $NOWAIT ]] && for i in {5..1}; do echo $i ; sleep 1 ; done
-  dd if=/dev/zero of=$DISK bs=1M count=1
-fi
+def execute(cmd):
+    try:
+        print(f"Running {cmd}")
+        r = run(cmd.split(), check=True)
+    except CalledProcessError as e:
+        sys.exit(10)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=desc, formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=40))
+    parser.add_argument("-f", "--force", action='store_true', help='Required for safety')
+    parser.add_argument("-n", "--dryrun", action='store_true', help='Skip actual wipe')
+    parser.add_argument("-w", "--nowait", action='store_true', help='Skip the delay')
+    parser.add_argument("-s", "--size", type=int, metavar='size', default=1, help='Overwrite <size> mib of the disk')
+    parser.add_argument("dev", metavar='device')
+
+    args = parser.parse_args()
+    dev  = args.dev
+    name = args.dev.replace('/','_')
+    st   = os.stat(dev)
+
+    if not stat.S_ISBLK(st.st_mode):
+        print(f"{dev} is not a block device")
+        sys.exit()
+
+    if not args.force:
+        print("Force flag (-f) required!")
+        sys.exit()
+    
+    if not args.nowait:
+        print("Waiting 5 seconds...")
+        sleep(5)
+    
+    backupfile = f'/tmp/backup_{name}'
+
+    print(f"Backing up to {backupfile}")
+    execute(f"/usr/bin/dd if={dev} of={backupfile} bs=1M count={args.size}")
+
+    if not args.dryrun:
+        execute(f"/usr/bin/dd if=/dev/zero of={dev} bs=1M count={args.size}")

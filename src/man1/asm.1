@@ -1,4 +1,4 @@
-.TH ASM "1" "October 2018" "Outrun" "asmdisks"
+.TH ASM "1" "December 2023" "Dirty Cache" "asmdisks"
 .SH NAME
 asm \- Manage disks and volumes for Oracle ASM
 .SH SYNOPSIS
@@ -8,7 +8,7 @@ asm \- Manage disks and volumes for Oracle ASM
 .B asm
 is a replacement for the
 .B oracleasm
-command provided via Oracle ASMlib. It attempts to provide similar functionality using a simple script
+command provided via Oracle ASMlib. It attempts to provide similar functionality using a simple python script
 and Linux UDEV rather than tweaking the kernel with an add\-on kernel module,
 complex configuration and binary files.
 .PP
@@ -19,10 +19,10 @@ Mapper devices can be multipath devices, LVM logical volumes, or any other
 block device managed by Linux device\-mapper.
 .PP
 The administration of those files is done through the
-.I /etc/asmtab
-configuration file, which holds the asmdisks volume name, volume type,
+.I /etc/asmtab.db
+sqlite3 database file, which holds the asmdisks volume name, volume type,
 and the identifier, to provide persistent naming across reboots
-and reconfiguration. You may manually edit this file if so needed. The
+and reconfiguration. You may manually edit this file if so needed, using sqlite3(1). The
 .B UDEV
 configuration in
 .I /etc/udev/rules.d/
@@ -33,14 +33,27 @@ and activating the udev rules file and does nothing until an administrator runs
 the tool. You may even remove asmdisks and the configuration will still keep working.
 .SH OPTIONS
 .TP
+\fB\-V\fR
+Show version information
+.TP
+-h
+Show help.
+Can also be added after each subcommand, i.e. \fBasm configure -h\fR
+.TP
 \fB\-n\fR
-no headings
+no headings (use with -t)
 .TP
 \fB\-t\fR
 use TAB separator (for scripting) instead of column formatted (implies \fB\-n\fR)
 .TP
 rescan
 lets the kernel probe for new SCSI devices (after hot\-adding disks)
+.TP
+list
+Lists the volumes defined in the database
+.TP
+disks
+Lists the available disks on the system and their symbolic link (if available)
 .TP
 createdisk <label> <block device>
 adds a disk as /dev/oracleasm/<label>
@@ -51,44 +64,53 @@ The block device can be a raw disk (i.e. \fI\,/dev/sdX\/\fP), a previously creat
 disk partition (\fI\,/dev/sdX1\/\fP), or a device\-mapper block device, to be specified as
 any mapper device that points to the correct \fI\,/dev/dm\-X\/\fP device,
 such as LVM logical volumes (i.e. \fI\,/dev/myvg/lvol1\/\fP), multipath devices (\fI\,/dev/mapper/mpathX\/\fP)
-etc. "asm" will attempt to figure out the type of device and specify the correct ID in asmtab.
+etc. "asm" will attempt to figure out the type of device and specify the correct ID in asmtab.db.
+.IP
+Will fail if the disk is not empty or not a (previously used) ASM disk.
 .TP
 deletedisk <label>
 deletes the disk from /dev/<diskstring>/.
 .IP
-It will not be completely removed but re\-appear
-as \fI\,/dev/sdX\/\fP or \fI\,/dev/dm\-X\/\fP etc. Be careful, if the disk is still in use it could
+The permissions on the underlying /dev/xxx device will be reset to the defaults.
+Be careful, if the disk is still in use it could
 result in I/O errors and even dataloss.
 .TP
 renamedisk <label> <new>
 renames the disk (beware if disk is in use!)
-.TP
-scandisks
-processes any changes in asmtab, creates new UDEV rules
 .IP
-(run it after createdisk/deletedisk to
-activate your changes). It's called automatically after createdisk/deletedisk actions.
+Requires the --force flag as an extra safety.
 .TP
-disks
-shows all SCSI disks, SCSI connections, size and path
-.IP
-also shows SCSI addresses (handy for figuring out which VMDK / iSCSI / etc volume is used)
-.TP
-multi
-list multipath devices
-.TP
-list
-show all devices currently configured under \fI\,/dev/oracleasm\/\fP
+export
+Exports the database to a JSON file (/tmp/asmdisks.json)
+
+This allows the data to be imported on another host (useful with Oracle RAC) or backed up.
 .TP
 import
-Imports all volumes from /dev/sd* that are labeled as ASMdisk
+Imports the database from a JSON file (/tmp/asmdisks.json)
+.TP
+importrules <udev rules file>
+Imports the database from a pre-existing UDEV rules file (such as /etc/udev/rules.d/99-asm.rules)
+The file must have been previously generated with asmdisks to be parsed.
+.TP
+importasm
+Creates a volume for each previously used ASM disk. Volumes will be named vol01, vol02, and so on.
+.TP
+rebuild
+processes any changes in the database and creates a new UDEV rules file, and activates it
 .IP
-i.e. they have an Oracle ASM disk signature created by another host (cloning) or another node (RAC.
-It simply imports volumes as vol01, vol02, etc.
-as ASM does not care what the Linux device name looks like anyway.
+It's called automatically after createdisk/deletedisk/renamedisk actions.
 .TP
 dump
-Shows the contents of \fI\,/etc/udev/rules.d/99\-asm.rules\/\fP
+Shows the contents of the UDEV rules file \fI\,/etc/udev/rules.d/98\-asm.rules\/\fP
+.TP
+setup
+Creates the SQLite database and loads the schema (needed before using the tool)
+.TP
+configure
+Configures overall settings (asm diskstring, and user/group/mode of generated disks). See \fBconfigure -h\fR for more details.
+.TP
+destroy
+Destroys (deletes) the SQLite database. Run setup before asmdisks can be used again. Requires the \fB--force\fR flag.
 .SH "SCSI UUID"
 The scsi identifier is retrieved via the
 .B scsi_id(8)
@@ -100,7 +122,7 @@ The VMware default (all products) is to have this ID disabled. It must be re\-en
 in the VM's VMX configuration file.
 This tool will not work without this setting.  You may verify if that works using the command
 .br
-.B scsi_id \fB\-\-whitelisted\fR \fI\,/dev/sda\/\fP
+.B /usr/lib/udev/scsi_id \fB\-\-whitelisted\fR \fI\,/dev/sda\/\fP
 .br
 or running "asm" without options (it will complain if \fI\,/dev/sda\/\fP does not show a SCSI identifier).
 .SH DISKSTRINGS
@@ -110,51 +132,13 @@ ownership grid:asmdba and mode 0660.
 You may want to configure volumes elsewhere and with different permissions. If you specify a
 relative path as volume name then the volume will be configured under /dev/<path>/name,
 for example "iorate/vol1" will appear as \fI\,/dev/iorate/vol1\/\fP.
-The permissions will be the default (grid:asmdba) unless an entry for the new diskstring
-is defined in asmtab (needs to be done manually). At initial creation, "asm" defines
-one special case (in asmtab) for iorate:
-.nf
-PATH=iorate:root:iops:0660
-.fi
-This means if you create volumes as iorate/<volname> they will have permissions root:iops @ mode 0660.
-This allows the IORate tool to run under userid "iorate" having group membership "iops" with access
-to those devices \- without giving the user full access to all disks (such as by making it
-a member of the "disk" group). This prevents IORate to accidentally overwrite OS or ASM
-devices (when using the iorate RPM package, that is). IORate will only have direct access
-to volumes under \fI\,/dev/iorate\/\fP.
-ASM will fall back to grid:asmdba if the specified user/group does not exist.
-Another purpose for having an additional diskstring is if you want to run more
-than one Oracle ASM instance \- each can have it's own diskstring and permissions.
-The default grid:asmdba owner/group can be altered by setting
-.br
-PATH=oracleasm:user:group:mode in the asmtab file.
-.SH "ASMTAB FILE FORMAT"
-Define all non\-default diskstrings as
-.nf
-.PP
-PATH=<diskstring>:<owner>:<group>:<mode>
-.PP
-.fi
-Non\-defined diskstrings will have default ownerships/modes.
-.br
-For every volume to be defined, register one entry in asmtab as
-.nf
-.PP
-<diskstring/volumename> <type> <id>
-.PP
-.fi
-diskstring may be omitted (defaults to "oracleasm"). Type is currently either "scsi" or "mapper".
-.br
-id is either a scsi_identifier (such as SCSI device "36000c29f825cd85b5fcc70a1aadebf0c" or
-iSCSI id "1IET_00010001") or a similar identifier appended with :<partnum>,
-such as "36000c29f825cd85b5fcc70a1aadebf0c:2" indicating the 2nd partition on that
-SCSI disk, or a name as it appears under /dev/mapper/ such as \fI\,/dev/mapper/myvg\-vol1\/\fP.
-.br
-Normally you should not have to edit asmtab manually, however in some cases it may become handy.
+The permissions will be the default (grid:asmdba) unless the settings are modified through the \fBconfigure\fR subcommand.
 .SH "SUPPORTED DISK TYPES"
 asmdisks currently supports the following block device types:
 .P
 \- Plain SCSI disk (/dev/sd*)
+.br
+\- NVME disk (/dev/nvmeXnX)
 .br
 \- Linux Multipath (/etc/multipath/*, multipath \fB\-ll\fR)
 .br
@@ -170,12 +154,8 @@ RAC with anything else than full SCSI disks or SCSI disk partitions will not wor
 .SH "RAW SCSI DISKS OR DISK PARTITIONS"
 Many administrators prefer to create a primary partition first on each disk,
 then use that for ASM (this is the standard way of using disks with Oracle ASMLib).
-My preference is to hand full disks (not partitioned) to ASM. By using "asm"
-the risk of a rookie administrator creating filesystems or anything else on that disk
-is virtually eliminated, because the disk device is removed from \fI\,/dev/sdXX\/\fP,
-and reappears as \fI\,/dev/oracleasm/volXX\/\fP. An admin who would still create a filesystem on
-such a device should be sent back to basic UNIX administration training.
-Using full disks eliminates the need for disk alignment and some extra administration steps.
+My preference is to hand full disks (not partitioned) to ASM. Using full disks eliminates
+the need for disk alignment and some extra administration steps.
 .P
 Note that with Enterprise Linux 7 this feature of udev no longer works and the only option
 is to add symlinks to devices in /dev/ so this is now the standard behaviour of asmdisks.
@@ -189,7 +169,6 @@ option so that the output is TAB separated instead of column formatted.
 In future versions, the columns and output order may change.
 .SH "BOOT DISK PROTECTION"
 asmdisks attempts to detect which disk is used as bootdisk and prevent messing with this disk directly.
-In some cases the detection fails. You may add the bootdisk to \fI\,/etc/asmtab\/\fP manually.
 .SH "KNOWN ISSUES"
 \- Modifying the UDEV config requires running "udevadm trigger" which in turn triggers network reconfiguration.
 A known issue when using DHCP is that the network scripts attempt to start a 2nd dhclient \- which fails and
@@ -198,11 +177,11 @@ results in errors in the syslog. You can safely ignore these.
 \- Enabling or disabling Linux Multipath may require a reboot to prevent strange asmdisks behaviour.
 .SH BUGS
 Likely. Currently "asm" does not do a lot of validation checking so in classic UNIX style, it offers
-many ways to mess up. Especially via directly editing asmtab. You have been warned.
+many ways to mess up. Especially via directly editing the asmtab.db database. You have been warned.
 .br
-That said, asm is "out of band", in other words it is not required for correct presentation of
+That said, asmdisks is "out of band", in other words it is not required for correct presentation of
 ASM devices. You could deinstall asmdisks, reboot and the ASM volumes would still be there (because of
-the 99\-asm.rules UDEV file). In the end, "asm" only manages this file and you may verify at any time
+the 98\-asm.rules UDEV file). In the end, "asm" only manages this file and you may verify at any time
 if the contents are correct or make backup copies of the file at any time.
 .br
 Note that to avoid potential problems with boot devices, \fI\,/dev/sda\/\fP is excluded from
@@ -210,7 +189,7 @@ any manipulation (I learned the hard way ;)
 .br
 So even if you mess up, you should be able to boot and fix problems by removing/restoring
 99\-asm.rules followed by "udevadm trigger" to reset udev.
-Then fix issues in asmtab and retry "asm scandisks".
+Then fix issues in asmtab.db and retry "asm rebuild".
 .P
 EMC Powerpath has not yet been fully tested with asm, but this would
 only be required for physically deployed hosts. Likewise for non\-standard SCSI devices such as
@@ -219,23 +198,19 @@ paravirtualized devices, or any other disk type that shows up different from wha
 Roughly speaking, any device that shows up as \fI\,/dev/sdXX\/\fP in Linux (i.e. it is an "sd" device type) should work.
 If you want support for another non\-standard device type, let me know and I will see if it's possible to add support.
 .SH FILES
-.I /etc/asmtab/
+.I /etc/asmtab.db
 .br
 .I /dev/oracleasm/
 .br
-.I /dev/iorate/
-.br
-.I /etc/udev/rules.d/99-asm.rules
-.br
-.I /etc/scsi_id.config
+.I /etc/udev/rules.d/98-asm.rules
 .SH AUTHOR
-Written by Bart Sjerps <bart@outrun.nl>, License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.
+Written by Bart Sjerps <bart@dirty-cache.com>, License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.
 .br
 If you have suggestions for improvements in this tool, please send them along via the above address.
 .SH COPYRIGHT
-Copyright \(co 2018 Bart Sjerps
+Copyright \(co 2023 Bart Sjerps
 .br
 .br
 This is free software: you are free to change and redistribute it. There is NO WARRANTY, to the extent permitted by law.
 .SH "SEE ALSO"
-wipedisk(1), asmstat(1), udev(7), udevadm(8), scsi_id(8)
+wipedisk(1), asmstat(1), diskheader(1), udev(7), udevadm(8), lsscsi(1)
