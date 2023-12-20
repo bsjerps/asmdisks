@@ -1,6 +1,6 @@
 Name:		asmdisks
 Summary:	Replacement for Oracle ASMLib using UDEV
-Version:	2.0.1
+Version:	2.0.2
 Release:	1%{?dtap}
 BuildArch:	noarch
 License:	GPLv3+

@@ -77,9 +77,12 @@ class RulesFile():
             f.write(footer)
 
     def dump(self):
-        with open(self.path) as f:
-            data = f.read()
-            print(data)
+        try:
+            with open(self.path) as f:
+                data = f.read()
+                print(data)
+        except FileNotFoundError:
+            raise ValueError(f"Rules file does not exist (yet) - {self.path}")
     
     @staticmethod
     def reload():
